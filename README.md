@@ -1,6 +1,6 @@
 # Data Retention Policy Manager
 
-**Contributors:** openai  
+**Contributors:** enCircle Solutions Ltd.  
 **Tags:** data-retention, privacy, gdpr, users, cron  
 **Requires at least:** 5.8  
 **Tested up to:** 6.5  
