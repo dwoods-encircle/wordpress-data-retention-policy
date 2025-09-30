@@ -5,6 +5,12 @@
  * Version: 1.1.0
  * Author: OpenAI Assistant
  * License: GPL2+
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
+ * Requires at least: 5.8
+ * Tested up to: 6.4
+ * Requires PHP: 7.4
+ * Text Domain: data-retention-policy
+ * Domain Path: /languages
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
