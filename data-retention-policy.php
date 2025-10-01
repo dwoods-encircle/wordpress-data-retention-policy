@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Data Retention Policy Manager
  * Description: Allows administrators to configure data retention policies for users, posts, and pages.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: OpenAI Assistant
  * License: GPL2+
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class DRP_Manager {
-    const VERSION               = '1.1.0';
+    const VERSION               = '1.2.0';
     const OPTION_KEY            = 'drp_settings';
     const CRON_HOOK             = 'drp_run_policies';
     const USER_DISABLED_META    = 'drp_disabled';
@@ -228,6 +228,10 @@ class DRP_Manager {
             'description' => __( 'Users are deleted this long after they are disabled. Leave blank or zero to skip.', 'data-retention-policy' ),
         ] );
 
+        add_settings_field( 'user_role_overrides', __( 'Role-specific overrides', 'data-retention-policy' ), [ $this, 'render_role_overrides_field' ], 'drp_settings_page', 'drp_user_section', [
+            'description' => __( 'Override the default user retention policy for specific roles. Leave empty to inherit the default.', 'data-retention-policy' ),
+        ] );
+
         add_settings_field( 'post_archive', __( 'Archive posts after', 'data-retention-policy' ), [ $this, 'render_duration_field' ], 'drp_settings_page', 'drp_content_section', [
             'name'        => 'post_archive',
             'description' => __( 'Archived posts remain accessible to administrators but are removed from public listings.', 'data-retention-policy' ),
@@ -276,7 +280,8 @@ class DRP_Manager {
         $settings = $this->get_settings();
         $name     = $args['name'];
         $value    = isset( $settings[ $name ] ) ? $settings[ $name ] : [ 'quantity' => '', 'unit' => 'days' ];
-        $quantity = isset( $value['quantity'] ) ? absint( $value['quantity'] ) : '';
+        $raw_qty  = isset( $value['quantity'] ) ? absint( $value['quantity'] ) : 0;
+        $quantity = $raw_qty > 0 ? $raw_qty : '';
         $unit     = isset( $value['unit'] ) ? sanitize_key( $value['unit'] ) : 'days';
         ?>
         <fieldset>
@@ -299,30 +304,178 @@ class DRP_Manager {
         <?php
     }
 
+    public function render_role_overrides_field( $args ) {
+        $settings      = $this->get_settings();
+        $role_policies = isset( $settings['role_policies'] ) && is_array( $settings['role_policies'] ) ? $settings['role_policies'] : [];
+        $roles         = $this->get_editable_role_labels();
+        $units         = $this->get_units();
+        ?>
+        <fieldset class="drp-role-overrides-field">
+            <?php if ( ! empty( $args['description'] ) ) : ?>
+                <p class="description"><?php echo esc_html( $args['description'] ); ?></p>
+            <?php endif; ?>
+            <?php if ( empty( $roles ) ) : ?>
+                <p><?php esc_html_e( 'No editable roles were found.', 'data-retention-policy' ); ?></p>
+            <?php else : ?>
+                <table class="drp-role-overrides">
+                    <thead>
+                        <tr>
+                            <th scope="col"><?php esc_html_e( 'Role', 'data-retention-policy' ); ?></th>
+                            <th scope="col"><?php esc_html_e( 'Disable after', 'data-retention-policy' ); ?></th>
+                            <th scope="col"><?php esc_html_e( 'Delete after', 'data-retention-policy' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $roles as $role => $label ) :
+                            $role_key         = sanitize_key( $role );
+                            $role_settings    = isset( $role_policies[ $role_key ] ) ? $role_policies[ $role_key ] : [];
+                            $disable_settings = isset( $role_settings['user_disable'] ) ? $role_settings['user_disable'] : [];
+                            $delete_settings  = isset( $role_settings['user_delete'] ) ? $role_settings['user_delete'] : [];
+
+                            $disable_qty  = isset( $disable_settings['quantity'] ) ? absint( $disable_settings['quantity'] ) : 0;
+                            $delete_qty   = isset( $delete_settings['quantity'] ) ? absint( $delete_settings['quantity'] ) : 0;
+                            $disable_val  = $disable_qty > 0 ? $disable_qty : '';
+                            $delete_val   = $delete_qty > 0 ? $delete_qty : '';
+                            $disable_unit = isset( $disable_settings['unit'] ) ? sanitize_key( $disable_settings['unit'] ) : 'days';
+                            $delete_unit  = isset( $delete_settings['unit'] ) ? sanitize_key( $delete_settings['unit'] ) : 'days';
+
+                            if ( ! array_key_exists( $disable_unit, $units ) ) {
+                                $disable_unit = 'days';
+                            }
+
+                            if ( ! array_key_exists( $delete_unit, $units ) ) {
+                                $delete_unit = 'days';
+                            }
+
+                            $disable_name        = self::OPTION_KEY . "[role_policies][$role_key][user_disable]";
+                            $delete_name         = self::OPTION_KEY . "[role_policies][$role_key][user_delete]";
+                            $disable_quantity_id = self::OPTION_KEY . '-' . $role_key . '-user-disable-quantity';
+                            $disable_unit_id     = self::OPTION_KEY . '-' . $role_key . '-user-disable-unit';
+                            $delete_quantity_id  = self::OPTION_KEY . '-' . $role_key . '-user-delete-quantity';
+                            $delete_unit_id      = self::OPTION_KEY . '-' . $role_key . '-user-delete-unit';
+                            ?>
+                            <tr>
+                                <td><strong><?php echo esc_html( $label ); ?></strong></td>
+                                <td>
+                                    <label class="screen-reader-text" for="<?php echo esc_attr( $disable_quantity_id ); ?>">
+                                        <?php
+                                        printf(
+                                            /* translators: %s: user role label. */
+                                            esc_html__( 'Disable %s after', 'data-retention-policy' ),
+                                            esc_html( $label )
+                                        );
+                                        ?>
+                                    </label>
+                                    <input type="number" min="0" step="1" id="<?php echo esc_attr( $disable_quantity_id ); ?>" name="<?php echo esc_attr( $disable_name . '[quantity]' ); ?>" value="<?php echo esc_attr( $disable_val ); ?>" />
+                                    <label class="screen-reader-text" for="<?php echo esc_attr( $disable_unit_id ); ?>">
+                                        <?php
+                                        printf(
+                                            /* translators: %s: user role label. */
+                                            esc_html__( 'Disable %s unit selection', 'data-retention-policy' ),
+                                            esc_html( $label )
+                                        );
+                                        ?>
+                                    </label>
+                                    <select id="<?php echo esc_attr( $disable_unit_id ); ?>" name="<?php echo esc_attr( $disable_name . '[unit]' ); ?>">
+                                        <?php foreach ( $units as $unit_key => $unit_label ) : ?>
+                                            <option value="<?php echo esc_attr( $unit_key ); ?>" <?php selected( $disable_unit, $unit_key ); ?>>
+                                                <?php echo esc_html( $unit_label ); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
+                                <td>
+                                    <label class="screen-reader-text" for="<?php echo esc_attr( $delete_quantity_id ); ?>">
+                                        <?php
+                                        printf(
+                                            /* translators: %s: user role label. */
+                                            esc_html__( 'Delete %s after', 'data-retention-policy' ),
+                                            esc_html( $label )
+                                        );
+                                        ?>
+                                    </label>
+                                    <input type="number" min="0" step="1" id="<?php echo esc_attr( $delete_quantity_id ); ?>" name="<?php echo esc_attr( $delete_name . '[quantity]' ); ?>" value="<?php echo esc_attr( $delete_val ); ?>" />
+                                    <label class="screen-reader-text" for="<?php echo esc_attr( $delete_unit_id ); ?>">
+                                        <?php
+                                        printf(
+                                            /* translators: %s: user role label. */
+                                            esc_html__( 'Delete %s unit selection', 'data-retention-policy' ),
+                                            esc_html( $label )
+                                        );
+                                        ?>
+                                    </label>
+                                    <select id="<?php echo esc_attr( $delete_unit_id ); ?>" name="<?php echo esc_attr( $delete_name . '[unit]' ); ?>">
+                                        <?php foreach ( $units as $unit_key => $unit_label ) : ?>
+                                            <option value="<?php echo esc_attr( $unit_key ); ?>" <?php selected( $delete_unit, $unit_key ); ?>>
+                                                <?php echo esc_html( $unit_label ); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </fieldset>
+        <?php
+    }
+
     public function sanitize_settings( $input ) {
-        $output   = [];
-        $defaults = $this->get_default_settings();
+        $defaults      = $this->get_default_settings();
+        $duration_keys = [ 'user_disable', 'user_delete', 'post_archive', 'page_archive' ];
+        $output        = [];
 
-        foreach ( $defaults as $key => $default_value ) {
-            $quantity = 0;
-            $unit     = $default_value['unit'];
-
-            if ( isset( $input[ $key ]['quantity'] ) ) {
-                $quantity = max( 0, absint( $input[ $key ]['quantity'] ) );
-            }
-
-            if ( isset( $input[ $key ]['unit'] ) ) {
-                $candidate_unit = sanitize_key( $input[ $key ]['unit'] );
-                if ( array_key_exists( $candidate_unit, $this->get_units() ) ) {
-                    $unit = $candidate_unit;
-                }
-            }
-
-            $output[ $key ] = [
-                'quantity' => $quantity,
-                'unit'     => $unit,
-            ];
+        foreach ( $duration_keys as $key ) {
+            $output[ $key ] = $this->sanitize_duration_value( isset( $input[ $key ] ) ? $input[ $key ] : [], $defaults[ $key ]['unit'] );
         }
+
+        $role_policies = [];
+        $role_labels   = $this->get_editable_role_labels();
+
+        foreach ( $role_labels as $role => $label ) {
+            $role_key   = sanitize_key( $role );
+            $role_input = isset( $input['role_policies'][ $role_key ] ) ? $input['role_policies'][ $role_key ] : [];
+
+            if ( ! is_array( $role_input ) ) {
+                continue;
+            }
+
+            $has_override = false;
+
+            if ( isset( $role_input['user_disable']['quantity'] ) && '' !== $role_input['user_disable']['quantity'] ) {
+                $has_override = true;
+            }
+
+            if ( isset( $role_input['user_delete']['quantity'] ) && '' !== $role_input['user_delete']['quantity'] ) {
+                $has_override = true;
+            }
+
+            if ( ! $has_override ) {
+                continue;
+            }
+
+            $role_policies[ $role_key ] = [
+                'user_disable' => $this->sanitize_duration_value( isset( $role_input['user_disable'] ) ? $role_input['user_disable'] : [], $defaults['user_disable']['unit'] ),
+                'user_delete'  => $this->sanitize_duration_value( isset( $role_input['user_delete'] ) ? $role_input['user_delete'] : [], $defaults['user_delete']['unit'] ),
+            ];
+
+            if ( ! $this->has_duration( $role_policies[ $role_key ]['user_disable'] ) && $this->has_duration( $role_policies[ $role_key ]['user_delete'] ) ) {
+                $role_policies[ $role_key ]['user_delete']['quantity'] = 0;
+                add_settings_error(
+                    self::OPTION_KEY,
+                    'drp_user_delete_without_disable_' . $role_key,
+                    sprintf(
+                        /* translators: %s: user role label. */
+                        __( 'Users in the %s role must be disabled before they can be deleted. The delete policy has been cleared.', 'data-retention-policy' ),
+                        $label
+                    ),
+                    'warning'
+                );
+            }
+        }
+
+        $output['role_policies'] = $role_policies;
 
         if ( ! $this->has_duration( $output['user_disable'] ) && $this->has_duration( $output['user_delete'] ) ) {
             $output['user_delete']['quantity'] = 0;
@@ -330,6 +483,44 @@ class DRP_Manager {
         }
 
         return $output;
+    }
+
+    protected function sanitize_duration_value( $input, $fallback_unit = 'days' ) {
+        $units    = $this->get_units();
+        $quantity = 0;
+
+        if ( is_array( $input ) && isset( $input['quantity'] ) && '' !== $input['quantity'] ) {
+            $quantity = max( 0, absint( $input['quantity'] ) );
+        }
+
+        $unit = $fallback_unit;
+
+        if ( is_array( $input ) && isset( $input['unit'] ) ) {
+            $candidate_unit = sanitize_key( $input['unit'] );
+            if ( array_key_exists( $candidate_unit, $units ) ) {
+                $unit = $candidate_unit;
+            }
+        }
+
+        return [
+            'quantity' => $quantity,
+            'unit'     => $unit,
+        ];
+    }
+
+    protected function get_editable_role_labels() {
+        if ( ! function_exists( 'get_editable_roles' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/user.php';
+        }
+
+        $roles  = get_editable_roles();
+        $labels = [];
+
+        foreach ( $roles as $role => $details ) {
+            $labels[ sanitize_key( $role ) ] = translate_user_role( $details['name'] );
+        }
+
+        return $labels;
     }
 
     public function block_disabled_user_login( $user, $username, $password ) {
@@ -346,13 +537,8 @@ class DRP_Manager {
     public function execute_policies() {
         $settings = $this->get_settings();
 
-        if ( $this->has_duration( $settings['user_disable'] ) ) {
-            $this->disable_inactive_users( $settings['user_disable'] );
-        }
-
-        if ( $this->has_duration( $settings['user_delete'] ) ) {
-            $this->delete_disabled_users( $settings['user_delete'] );
-        }
+        $this->process_user_disable_policies( $settings );
+        $this->process_user_delete_policies( $settings );
 
         if ( $this->has_duration( $settings['post_archive'] ) ) {
             $this->archive_content( 'post', $settings['post_archive'] );
@@ -363,13 +549,52 @@ class DRP_Manager {
         }
     }
 
-    protected function disable_inactive_users( $duration ) {
+    protected function process_user_disable_policies( $settings ) {
+        $role_policies        = isset( $settings['role_policies'] ) && is_array( $settings['role_policies'] ) ? $settings['role_policies'] : [];
+        $roles_with_overrides = [];
+
+        foreach ( $role_policies as $role => $policies ) {
+            $role_key          = sanitize_key( $role );
+            $roles_with_overrides[] = $role_key;
+
+            if ( isset( $policies['user_disable'] ) && $this->has_duration( $policies['user_disable'] ) ) {
+                $this->disable_inactive_users( $policies['user_disable'], [ 'role__in' => [ $role_key ] ] );
+            }
+        }
+
+        $roles_with_overrides = array_values( array_unique( $roles_with_overrides ) );
+
+        if ( $this->has_duration( $settings['user_disable'] ) ) {
+            $this->disable_inactive_users( $settings['user_disable'], [ 'role__not_in' => $roles_with_overrides ] );
+        }
+    }
+
+    protected function process_user_delete_policies( $settings ) {
+        $role_policies        = isset( $settings['role_policies'] ) && is_array( $settings['role_policies'] ) ? $settings['role_policies'] : [];
+        $roles_with_overrides = [];
+
+        foreach ( $role_policies as $role => $policies ) {
+            $role_key          = sanitize_key( $role );
+            $roles_with_overrides[] = $role_key;
+
+            if ( isset( $policies['user_delete'] ) && $this->has_duration( $policies['user_delete'] ) ) {
+                $this->delete_disabled_users( $policies['user_delete'], [ 'role__in' => [ $role_key ] ] );
+            }
+        }
+
+        $roles_with_overrides = array_values( array_unique( $roles_with_overrides ) );
+
+        if ( $this->has_duration( $settings['user_delete'] ) ) {
+            $this->delete_disabled_users( $settings['user_delete'], [ 'role__not_in' => $roles_with_overrides ] );
+        }
+    }
+
+    protected function disable_inactive_users( $duration, $extra_query_args = [] ) {
         $threshold = $this->get_time_threshold( $duration );
         if ( ! $threshold ) {
             return;
         }
         $batch_size           = $this->get_batch_size( 'disable_users' );
-        $excluded_roles       = $this->get_excluded_roles();
         $super_admin_ids      = $this->get_super_admin_ids();
         $common_disabled_meta = [
             'relation' => 'OR',
@@ -384,6 +609,11 @@ class DRP_Manager {
             ],
         ];
         $date_threshold      = gmdate( 'Y-m-d H:i:s', $threshold );
+
+        $extra_query_args = $this->normalize_role_query_args( $extra_query_args, $this->get_excluded_roles() );
+        if ( false === $extra_query_args ) {
+            return;
+        }
 
         $queries = [
             [
@@ -443,9 +673,7 @@ class DRP_Manager {
                     $args
                 );
 
-                if ( ! empty( $excluded_roles ) ) {
-                    $query_args['role__not_in'] = $excluded_roles;
-                }
+                $query_args = array_merge( $query_args, $extra_query_args );
 
                 $query   = new WP_User_Query( $query_args );
                 $results = $query->get_results();
@@ -466,13 +694,12 @@ class DRP_Manager {
         }
     }
 
-    protected function delete_disabled_users( $duration ) {
+    protected function delete_disabled_users( $duration, $extra_query_args = [] ) {
         $threshold = $this->get_time_threshold( $duration );
         if ( ! $threshold ) {
             return;
         }
         $batch_size      = $this->get_batch_size( 'delete_users' );
-        $excluded_roles  = $this->get_excluded_roles();
         $super_admin_ids = $this->get_super_admin_ids();
         $page            = 1;
 
@@ -481,6 +708,11 @@ class DRP_Manager {
         }
 
         require_once ABSPATH . 'wp-admin/includes/user.php';
+
+        $extra_query_args = $this->normalize_role_query_args( $extra_query_args, $this->get_excluded_roles() );
+        if ( false === $extra_query_args ) {
+            return;
+        }
 
         do {
             $query_args = [
@@ -499,9 +731,7 @@ class DRP_Manager {
                 ],
             ];
 
-            if ( ! empty( $excluded_roles ) ) {
-                $query_args['role__not_in'] = $excluded_roles;
-            }
+            $query_args = array_merge( $query_args, $extra_query_args );
 
             $query   = new WP_User_Query( $query_args );
             $results = $query->get_results();
@@ -562,6 +792,43 @@ class DRP_Manager {
         } while ( count( $post_ids ) === $batch_size );
     }
 
+    protected function normalize_role_query_args( $extra_args, $excluded_roles ) {
+        $normalized      = is_array( $extra_args ) ? $extra_args : [];
+        $excluded_roles  = array_filter( array_map( 'sanitize_key', (array) $excluded_roles ) );
+
+        if ( isset( $normalized['role__in'] ) ) {
+            $role_in = array_filter( array_map( 'sanitize_key', (array) $normalized['role__in'] ) );
+
+            if ( ! empty( $excluded_roles ) ) {
+                $role_in = array_values( array_diff( $role_in, $excluded_roles ) );
+            }
+
+            if ( empty( $role_in ) ) {
+                return false;
+            }
+
+            $normalized['role__in'] = $role_in;
+            unset( $normalized['role__not_in'] );
+
+            return $normalized;
+        }
+
+        $role_not_in = isset( $normalized['role__not_in'] ) ? (array) $normalized['role__not_in'] : [];
+        $role_not_in = array_filter( array_map( 'sanitize_key', $role_not_in ) );
+
+        if ( ! empty( $excluded_roles ) ) {
+            $role_not_in = array_values( array_unique( array_merge( $role_not_in, $excluded_roles ) ) );
+        }
+
+        if ( ! empty( $role_not_in ) ) {
+            $normalized['role__not_in'] = $role_not_in;
+        } else {
+            unset( $normalized['role__not_in'] );
+        }
+
+        return $normalized;
+    }
+
     protected function has_duration( $duration ) {
         return ! empty( $duration['quantity'] ) && absint( $duration['quantity'] ) > 0;
     }
@@ -614,6 +881,7 @@ class DRP_Manager {
             'user_delete'  => [ 'quantity' => 0, 'unit' => 'days' ],
             'post_archive' => [ 'quantity' => 0, 'unit' => 'days' ],
             'page_archive' => [ 'quantity' => 0, 'unit' => 'days' ],
+            'role_policies' => [],
         ];
     }
 
